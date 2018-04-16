@@ -1,164 +1,166 @@
-#!/usr/bin/python
-# -*- coding:utf-8 -*-
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-'''
-Utilities for parsing textRank algorithm files. 
-=======================
-author: bsi chrb skybs    
-date:2016-04-17
+from __future__ import absolute_import, unicode_literals
+import sys,re
+import pandas as pd
+from tqdm import tqdm
+from operator import itemgetter
+from collections import defaultdict
 
-དྲྭ་རྐུན།  བསེ་ཁྲབ་སྐྱབས།
-དུས་ཚོད། ༢༠༡༧ ༠༤ ༡༧
-=======================
-'''
+def readlines(path):
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-import collections
-import numpy as np
-import math
+    with open(path) as rf:
+        lines = rf.readlines()
+        lines = [line.strip() for line in lines if line.strip()]
+        return lines
 
 
-def dtm(docs, min = 0):
-    #མིང་ཚིག་རེ་རེའི་ཟློས་གྲངས་བརྩི་དགོས།
-    wordList = sum(docs,[])
-    # འདེིར་ཟློས་ཕྱོད་ཆེ་དྲག་པའམ་ཕྲད་ལ་སོགས་ཀྱི་དོན་སྟོན་མི་ནུས་བའི་མིང་ཚིག་དག་དོར་བ།
-    counter_word = collections.Counter(wordList)
-    #ཆེ་ནས་ཆུང་བའི་གོ་རིམ་ལྟར་བསྒྲིག་དགོས།
-    count_pairs_word = sorted(counter_word.items(), key=lambda x: (-x[1], x[0]))
-    count_pairs_word = [(w,i) for w,i in count_pairs_word if i > min]
-    vocabList, _ = list(zip(*count_pairs_word))
-    
-    nDoc = len(docs)
-    nVocab = len(vocabList)
-    dtm = np.zeros((nDoc, nVocab))
-    
-    row_idx = 0
-    for line in docs:
-        for word in line:
-            idx = vocabList.index(word)
-            dtm[row_idx, idx] += 1.0
-        row_idx +=1
-    return dtm, vocabList
+itervalues = lambda d: iter(d.values())
+tokenizer = lambda x:re.split("\s+",x)
 
-def tfIdf(dtm):
-    nDoc = dtm.shape[0]
-    nTerm = dtm.shape[1]
-    # ཟློས་གྲངས་དེ་ཟློས་ཕྱོད་དུ་སྒྱུར་བ། དེའང་མིང་ཚིག་རེ་རེ་ཚིག་གཅིག་ཏུ་བྱུང་བའི་ཟློས་ཕྱོད་ཡིན།
-    dtmNorm = dtm/dtm.sum(axis=1, keepdims=True)
-    dtmNorm = np.nan_to_num(dtmNorm)
-    tfIdfMat = np.zeros((nDoc,nTerm))
-    
-    for j in range(nTerm):
-        tfVect = dtmNorm[:, j]
-        # ཚིག་ཚང་མའི་ཁྲོད་ཀྱི་མིང་ཚིག་གི་སྡོམ་གྲངས་བརྩི་དགོས།
-        nExist = np.sum(tfVect > 0.0) # if tfVect is 0.0, word is not in current doc
-        idf = 0.0
-        # int32
-        if (nExist > 0):
-            idf = np.log(nDoc/nExist)/np.log(2) # log2()
+class KeywordExtractor(object):
+        
+    STOP_WORDS = set(("དང","ཀྱི","གི","གྱི","ཡི","འི","ཀྱིས","གིས","གྱིས","ཡིས","འིས","སུ","རུ",
+                      "ཏུ","དུ","ན","ལ","ར","རའ","ཏེ","དེ","སྟེ","ནི","ཀྱང","འང","ཡང","ཅིང",
+                      "ཞིང","ཤིང","ཅེ་ན","ཞེ་ན","ཤེ་ན","ཅེས་པ","ཞེས་པ","ཅེའོ","ཞེའོ","ཤེའོ","ཅིག","ཤིག",
+                      "ཞིག","ཡོད","འདུག","བདའ","ལྡན","གནས","ཡིན","མིན","རེད","མ","མི","མེད",
+                      "མིན","རྒྱུ","བཞིན","གང","ཅི","ཇི","ཟེར","ཞུ","ཞུས","མཛོད","རབ་ཏུ","ཀུན་ནས",
+                      "ཚུལ","གཅིག","གཉིས","གསུམ","བཞི","ལྔ","དྲུག","བདུན","བརྒྱད","དགུ","བཅུ",
+                      "བཅུ་གཅིག","བཅུ་གཉིས","བཅུ་གསུམ","བཅུ་བཞི","བཅོ་ལྔ","བཅུ་དྲུག","བཅུ་བདུན","བཅོ་བརྒྱད",
+                      "བཅུ་དགུ","ཉི་ཤུ","སུམ་ཅུ","བཞི་བཅུ","ལྔ་བཅུ","དྲུག་ཅུ","བདུན་ཅུ","བརྒྱད་ཅུ","དགུ་བཅུ","བརྒྱ",
+                      "སྟོང","ཁྲི","འབུམ","ས་ཡ","ལས","ནས","སོགས","བཅས","རྣམས","ཕྱིར","ཁོ་ན",
+                      "འདི","དེ","ཡེ་གནས","ཀུན","སྣང","ངང","ཡོངས","ནང","ཕྱི","སྟེང","འོག","སླད",
+                      "ཆེད","ཆེད་དུ","སླད་དུ","ལ་སོགས","བྱེད་པ","གང་ཡིན","གོ","ངོ","དོ","ནོ","བོ","མོ",
+                      "འོ","རོ","ལོ","སོ","ཏོ","མེད་པ","དག","འདྲ","རིམ་བཞིན","མོད","དེ་ལྟ","ཇི་ལྟར",
+                      "དེ་ནས","མཚུངས","ཞེས","ཅེས","མང","ཉུང","ལྟར","།","།།"))
+
+    def set_stop_words(self, stop_words_path):
+        if not os.path.isfile(stop_words_path):
+            raise Exception("file does not exist: " + stop_words_path)
+
+        lines = readlines(stop_words_path)
+        for line in lines:
+            self.STOP_WORDS.add(line)
+
+
+class UndirectWeightedGraph:
+    d = 0.85
+
+    def __init__(self):
+        self.graph = defaultdict(list)
+
+    def addEdge(self, start, end, weight):
+        # use a tuple (start, end, weight) instead of a Edge object
+        self.graph[start].append((start, end, weight))
+        self.graph[end].append((end, start, weight))
+
+    def rank(self,steps=20):
+        ws = defaultdict(float)
+        outSum = defaultdict(float)
+
+        wsdef = 1.0 / (len(self.graph) or 1.0)
+        for n, out in self.graph.items():
+            ws[n] = wsdef  #ཐོག་མར་མཐའ་རེ་རེར་གཅིག་གྱུར་གྱིས་སྲིད་ཕྱོད་སྟེར་བ།
+            outSum[n] = sum((e[2] for e in out), 0.0)
+
+        # 
+        sorted_keys = sorted(self.graph.keys())
+        for x in range(steps):  # 10 iters
+            for key in sorted_keys:
+                s = 0
+                for e in self.graph[key]:
+                    s += e[2] / outSum[e[1]] * ws[e[1]]
+                ws[key] = (1 - self.d) + self.d * s
+
+        (min_rank, max_rank) = (sys.float_info[0], sys.float_info[3])
+
+        for w in itervalues(ws):
+            if w < min_rank:
+                min_rank = w
+            if w > max_rank:
+                max_rank = w
+
+        for n, w in ws.items():
+            # to unify the weights, don't *100.
+            ws[n] = (w - min_rank / 10.0) / (max_rank - min_rank / 10.0)
+
+        return ws
+
+
+class TextRank(KeywordExtractor):
+
+    def __init__(self):
+        self.tokenizer = tokenizer # མིང་དུམ་གཅོད་བྱེད་པ།
+        self.stop_words = self.STOP_WORDS.copy()  # མཁོ་མེད་མིང་གི་ཚོགས་པ།
+        self.span = 5 # གོམ་ཐག
+
+    def pairfilter(self, word):
+        # ཚེག་ཁྱིམ་གཅིག་ཅན་དང་མཁོ་མེད་མིང་སོགས་བསུབ་པ།
+        return (word not in self.stop_words) #word.count("་") >= 1 and 
+
+    def textrank(self, sentence, topK=3, withWeight=False):
+        """
+        Extract keywords from sentence using TextRank algorithm.
+        Parameter:
+            - sentcence: ཐག་གཅོད་བྱའི་ཚིག
+            - topK: མིང་ག་ཚོད་ཅིག་ཕྱིར་མངོན།
+            - withWeight: མིང་དང་སྲིད་ཕྱོད་གཉི་ཀ་ཕྱིར་མངོན་ནམ།
+        """
+
+        g = UndirectWeightedGraph()
+        cm = defaultdict(int)
+        words = tuple(self.tokenizer(sentence))
+        for i, word in enumerate(words):
+            if self.pairfilter(word):
+                for j in range(i + 1, i + self.span):
+                    if j >= len(words):
+                        break
+                    if not self.pairfilter(words[j]):
+                        continue
+                    cm[(word, words[j])] += 1
+
+        for terms, w in cm.items():
+            g.addEdge(terms[0], terms[1], w)
+        nodes_rank = g.rank()
+        if withWeight:
+            tags = sorted(nodes_rank.items(), key=itemgetter(1), reverse=True)
         else:
-            idf = 0.0
-        tfIdfMat[:,j] = tfVect * idf
-  
-    return tfIdfMat
+            tags = sorted(nodes_rank, key=nodes_rank.__getitem__, reverse=True)
 
-def cosine_similarity(v1,v2):
-    # ཕྱོགས་ཚད་གཉིས་ཀྱི་བཙུར་ཟུར་རྩི་བ།  ཉེ་མཚུངས་ཚད་རྩི་བ།
-    # "compute cosine similarity of v1 to v2: (v1 dot v2)/{||v1||*||v2||)"
-    sumxx, sumxy, sumyy = 0.0, 0.0, 0.0
-    sumxx = np.dot(v1, v1.T)
-    sumyy = np.dot(v2, v2.T)
-    sumxy = np.dot(v1, v2.T)
-    cosine = 0.0
-    if (math.sqrt(sumxx*sumyy) == 0.0):
-        cosine = 0.0
-    else:
-        cosine = sumxy/math.sqrt(sumxx*sumyy)
-    
-    return cosine
+        if topK:
+            return tags[:topK]
+        else:
+            return tags
 
-
-def calcAdj(tfIdfMat):
-    nDoc = tfIdfMat.shape[0]
-    simMat = np.zeros((nDoc, nDoc))
-    adjMat = np.zeros((nDoc, nDoc))
-    for i in range(nDoc):
-        for j in range(nDoc):
-            v1 = tfIdfMat[i,:]
-            v2 = tfIdfMat[j,:]
-            cosine_sim = cosine_similarity(v1, v2)
-            simMat[i, j] = cosine_sim
+def get_keys(texts,topk=3):
     
-    # ཆ་སྙོམས་ཀྱི་ཉེ་མཚུངས་ཚད། ཉེ་མཚུངས་ཚད་ཆུང་དྲག་ན་དོར་བ། ཚད་ལོངས་ན་གཅིག་གིས་མཚོན་པ།
-    mean_sim = np.mean(simMat)
-    for i in range(nDoc):
-        for j in range(nDoc):
-            if (simMat[i,j] > mean_sim):
-                adjMat[i, j] = 1.0
-    return adjMat
-
-def pagerank(nDim, adjMat, alpha, itermax):
-    '''
-    Args:
-    alpha: damping factor, 
-    itermax: iteration Number
-    '''
-    P = np.ones((nDim, 1)) * (1/nDim)
+    keyList = []
+    for text in tqdm(texts):
+        TR = TextRank()
+        keys = TR.textrank(text)
+        keyList.append(" ".join(keys))
+        
+    return keyList
     
-    # normalize adjacency Matrix
-    B = adjMat/adjMat.sum(axis=1, keepdims=True)
-    B = np.nan_to_num(B)
     
-    U = np.ones((nDim, nDim)) * (1/nDim)
+if __name__ == "__main__":     
     
-    M = alpha * B + (1-alpha) * U
+    """
+    གལ་ཏེ་ཡིག་ཁུག csv ཅན་གྱི་གཞི་གྲངས་ཡོད་ན་འདིས་ཐག་གཅོད་བྱ་ཆོག་གོ
+    dataFile = "data.csv"
+    datas = pd.read_csv(dataFile)
+    texts = datas["text"]
+    keys  = get_keys(texts)
     
-    for i in range(itermax):
-        P = np.dot(M.T, P)
-    score = P.tolist()
-    return P
-
-def rank(docs, percent=0.2, alpha=0.85,itermax=500,order_by = 'id'):
-    '''
-    docs: input list of list, separated words;
-    percent: percent of sentences to keep
-    order_id: sorted 
-    alpha: 
-    itermax: the number of iterm
-    '''
+    ids = list(range(1,len(keys)+1))
+    #print(len(idList),len(keyList),len(textList))
+    result = pd.DataFrame({"id": ids, "key": keys, "text": texts},
+                         columns=['id','key',"text"])
+    result.to_csv("keys_data.csv",index=False)
+    """
+    TR = TextRank()
+    keys = TR.textrank("ང ནི སློབ་མ ཞིག ཡིན ། ཁོ ནི ཡང སློབ་མ ཞིག ཡིན ། མོ ནི དགེ་རྒན ཞིག ཡིན")
+    print(keys)
     
-    nDoc = len(docs)
-    docTermMat, vocab = dtm(docs)
-    tfIdfMat = tfIdf(docTermMat)
-    adjMat = calcAdj(tfIdfMat)
-    score = pagerank(nDoc, adjMat, alpha, itermax)
     
-    docScore = []
-    for i in range(nDoc):
-        docScore.append((i, docs[i], score[i])) # return list of tuples [(index, doc, score)]
-    
-    # Ranking
-    sortedList = sorted(docScore, key=lambda item : -item[2]) # sort to desc order of score
-    nKeep = np.int(nDoc * percent)
-    doc_sum = sortedList[0: nKeep] # doc_sum: nKeep number of document highest score
-    
-    if (order_by == 'score') :
-        rank_idx = 2
-    elif (order_by == 'id'):
-        rank_idx = 0
-    else :
-        rank_idx = 0
-    doc_sum_rerank = sorted(doc_sum, key=lambda item : item[rank_idx]) # nKeep number of document sort to increase order of index
-    return doc_sum_rerank
-
-if __name__ == '__main__':
-  
-    # document term Matrix
-    docs = [['དེ་རིང','གནམ་གཤིས','ཧ་ཅང', 'བཟང'],['གནམ་གཤིས', 'ཡག'],['དེ་རིང'],['ཁྱོད', 'ནི', 'སུ', 'སུ', 'ཡིན']]
-    percent = 0.5
-    list = rank(docs, percent)
-    print(list)
-
